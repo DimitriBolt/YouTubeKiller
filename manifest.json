@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "No YouTube",
   "version": "1.1",
-  "permissions": ["tabs", "alarms", "notifications"],
+  "permissions": ["tabs", "alarms", "notifications", "windows"],
   "background": {
     "service_worker": "background.js"
   }
