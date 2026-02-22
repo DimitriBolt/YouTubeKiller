@@ -1,22 +1,25 @@
 const TIME_LIMIT_MINUTES = 10; // Основной таймер
-const WARNING_BEFORE_SECONDS = 20; // За сколько секунд предупреждать
+const WARNING_BEFORE_SECONDS = 60; // За сколько секунд предупреждать
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && tab.url) {
+    if (changeInfo.status === 'complete' && tab && tab.url) {
         if (tab.url.includes("youtube.com") || tab.url.includes("youtu.be")) {
             const mainAlarm = `close_tab_${tabId}`;
             const warnAlarm = `warn_tab_${tabId}`;
 
+            // Если будильник для этого таба уже зарегистрирован, не создаём заново
             chrome.alarms.get(mainAlarm, (alarm) => {
                 if (!alarm) {
-                    console.log(`YouTube detected. Timers set.`);
+                    console.log(`YouTube detected (tab ${tabId}). Timers set.`);
 
-                    // Основной будильник (через X минут)
+                    // Основной будильник (через TIME_LIMIT_MINUTES)
                     chrome.alarms.create(mainAlarm, { delayInMinutes: TIME_LIMIT_MINUTES });
 
-                    // Будильник для уведомления (основное время минус 10 секунд)
-                    const delayInMs = (TIME_LIMIT_MINUTES * 60 * 1000) - (WARNING_BEFORE_SECONDS * 1000);
-                    chrome.alarms.create(warnAlarm, { when: Date.now() + delayInMs });
+                    // Будильник для уведомления (основное время минус WARNING_BEFORE_SECONDS)
+                    const totalSeconds = TIME_LIMIT_MINUTES * 60;
+                    const warnSeconds = Math.max(0, totalSeconds - WARNING_BEFORE_SECONDS);
+                    const delayInMinutes = warnSeconds / 60;
+                    chrome.alarms.create(warnAlarm, { delayInMinutes: delayInMinutes });
                 }
             });
         }
@@ -24,36 +27,64 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-    const tabId = parseInt(alarm.name.split("_")[2]);
+    if (!alarm || !alarm.name) return;
 
-    // ... (весь код выше остается прежним)
+    const parts = alarm.name.split("_");
+    // Expect names like close_tab_<tabId> or warn_tab_<tabId>
+    if (parts.length < 3) return;
+
+    const tabId = parseInt(parts[2], 10);
+    if (isNaN(tabId)) return;
 
     // Логика уведомления
     if (alarm.name.startsWith("warn_tab_")) {
         chrome.notifications.create({
             type: 'basic',
-            // Используем пустую строку или не указываем iconUrl вообще
-            // В Linux/KDE Chrome подставит свою стандартную иконку
             iconUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
             title: 'Самодисциплина',
             message: `YouTube будет закрыт через ${WARNING_BEFORE_SECONDS} секунд. Пора готовиться к работе!`,
             priority: 2
+        }, (notificationId) => {
+            if (chrome.runtime.lastError) {
+                console.warn('Notification failed:', chrome.runtime.lastError.message);
+            } else {
+                console.log('Warn notification shown, id=', notificationId);
+            }
         });
+        return;
     }
 
-    // ... (весь код ниже остается прежним)
-
-
-    // Логика редиректа (основной будильник)
+    // Логика закрытия: открыть новую ссылку в новом окне и закрыть исходную вкладку
     if (alarm.name.startsWith("close_tab_")) {
-        chrome.tabs.update(tabId, {
-            url: "https://chatgpt.com/g/g-p-68be258b13c881919b1121c15fdd2789-theory/project"
-        }).then(() => {
-            // chrome.tabs.create({ url: "https://d2l.arizona.edu/d2l/home" });
-        }).catch(err => console.log("Tab closed before redirect"));
+        const targetUrl = "https://chatgpt.com/g/g-p-68be258b13c881919b1121c15fdd2789-theory/project";
+
+        // Открываем новое окно с целевым URL
+        chrome.windows.create({ url: targetUrl, focused: true }, (newWindow) => {
+            if (chrome.runtime.lastError) {
+                // Если открыть окно не удалось, всё равно попытаемся убрать вкладку
+                console.warn('Failed to create new window:', chrome.runtime.lastError.message);
+            } else {
+                console.log('Opened new window id=', newWindow && newWindow.id);
+            }
+
+            // Закрываем исходную вкладку (если она ещё существует)
+            chrome.tabs.remove(tabId, () => {
+                if (chrome.runtime.lastError) {
+                    // Вполне нормально, если вкладка уже была закрыта пользователем
+                    console.warn(`Failed to remove tab ${tabId}:`, chrome.runtime.lastError.message);
+                } else {
+                    console.log(`YouTube tab ${tabId} closed`);
+                }
+
+                // Очистим связанные будильники на всякий случай
+                chrome.alarms.clear(`close_tab_${tabId}`);
+                chrome.alarms.clear(`warn_tab_${tabId}`);
+            });
+        });
     }
 });
 
+// Если вкладка закрывается вручную — убираем связанные будильники
 chrome.tabs.onRemoved.addListener((tabId) => {
     chrome.alarms.clear(`close_tab_${tabId}`);
     chrome.alarms.clear(`warn_tab_${tabId}`);
